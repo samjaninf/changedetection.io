@@ -1,4 +1,4 @@
-#!/usr/bin/python3
+#!/usr/bin/env python3
 
 import time
 from flask import url_for
@@ -44,7 +44,6 @@ def set_modified_response():
 
     return None
 
-
 def is_valid_uuid(val):
     try:
         uuid.UUID(str(val))
@@ -53,11 +52,12 @@ def is_valid_uuid(val):
         return False
 
 
-def test_setup(client, live_server):
+def test_setup(client, live_server, measure_memory_usage):
     live_server_setup(live_server)
 
-def test_api_simple(client, live_server):
-    #live_server_setup(live_server)
+
+def test_api_simple(client, live_server, measure_memory_usage):
+#    live_server_setup(live_server)
 
     api_key = extract_api_key_from_UI(client)
 
@@ -129,6 +129,9 @@ def test_api_simple(client, live_server):
     assert after_recheck_info['last_checked'] != before_recheck_info['last_checked']
     assert after_recheck_info['last_changed'] != 0
 
+    # #2877 When run in a slow fetcher like playwright etc
+    assert after_recheck_info['last_changed'] ==  after_recheck_info['last_checked']
+
     # Check history index list
     res = client.get(
         url_for("watchhistory", uuid=watch_uuid),
@@ -149,6 +152,15 @@ def test_api_simple(client, live_server):
         headers={'x-api-key': api_key},
     )
     assert b'which has this one new line' in res.data
+    assert b'<div id' not in res.data
+
+    # Fetch the HTML of the latest one
+    res = client.get(
+        url_for("watchsinglehistory", uuid=watch_uuid, timestamp='latest')+"?html=1",
+        headers={'x-api-key': api_key},
+    )
+    assert b'which has this one new line' in res.data
+    assert b'<div id' in res.data
 
     # Fetch the whole watch
     res = client.get(
@@ -163,6 +175,7 @@ def test_api_simple(client, live_server):
     # Loading the most recent snapshot should force viewed to become true
     client.get(url_for("diff_history_page", uuid="first"), follow_redirects=True)
 
+    time.sleep(3)
     # Fetch the whole watch again, viewed should be true
     res = client.get(
         url_for("watch", uuid=watch_uuid),
@@ -231,7 +244,7 @@ def test_api_simple(client, live_server):
     )
     assert len(res.json) == 0, "Watch list should be empty"
 
-def test_access_denied(client, live_server):
+def test_access_denied(client, live_server, measure_memory_usage):
     # `config_api_token_enabled` Should be On by default
     res = client.get(
         url_for("createwatch")
@@ -277,7 +290,7 @@ def test_access_denied(client, live_server):
     )
     assert b"Settings updated." in res.data
 
-def test_api_watch_PUT_update(client, live_server):
+def test_api_watch_PUT_update(client, live_server, measure_memory_usage):
 
     #live_server_setup(live_server)
     api_key = extract_api_key_from_UI(client)
@@ -359,7 +372,7 @@ def test_api_watch_PUT_update(client, live_server):
     assert b'Deleted' in res.data
 
 
-def test_api_import(client, live_server):
+def test_api_import(client, live_server, measure_memory_usage):
     api_key = extract_api_key_from_UI(client)
 
     res = client.post(

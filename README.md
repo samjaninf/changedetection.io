@@ -41,6 +41,20 @@ Using the **Browser Steps** configuration, add basic steps before performing cha
 After **Browser Steps** have been run, then visit the **Visual Selector** tab to refine the content you're interested in.
 Requires Playwright to be enabled.
 
+### Awesome restock and price change notifications
+
+Enable the _"Re-stock & Price detection for single product pages"_ option to activate the best way to monitor product pricing, this will extract any meta-data in the HTML page and give you many options to follow the pricing of the product.
+
+Easily organise and monitor prices for products from the dashboard, get alerts and notifications when the price of a product changes or comes back in stock again!
+
+[<img src="docs/restock-overview.png" style="max-width:100%;" alt="Easily keep an eye on product price changes directly from the UI"  title="Easily keep an eye on product price changes directly from the UI" />](https://changedetection.io?src=github)
+
+Set price change notification parameters, upper and lower price, price change percentage and more.
+Always know when a product for sale drops in price.
+
+[<img src="docs/restock-settings.png" style="max-width:100%;" alt="Set upper lower and percentage price change notification values"  title="Set upper lower and percentage price change notification values" />](https://changedetection.io?src=github)
+
+
 
 ### Example use cases
 
@@ -90,6 +104,23 @@ We [recommend and use Bright Data](https://brightdata.grsm.io/n0r16zf7eivq) glob
 [Oxylabs](https://oxylabs.go2cloud.org/SH2d) is also an excellent proxy provider and well worth using, they offer Residental, ISP, Rotating and many other proxy types to suit your project. 
 
 Please :star: star :star: this project and help it grow! https://github.com/dgtlmoon/changedetection.io/
+
+### Schedule web page watches in any timezone, limit by day of week and time.
+
+Easily set a re-check schedule, for example you could limit the web page change detection to only operate during business hours.
+Or perhaps based on a foreign timezone (for example, you want to check for the latest news-headlines in a foreign country at 0900 AM),
+
+<img src="./docs/scheduler.png" style="max-width:80%;" alt="How to monitor web page changes according to a schedule"  title="How to monitor web page changes according to a schedule"  />
+
+Includes quick short-cut buttons to setup a schedule for **business hours only**, or **weekends**.
+
+### We have a Chrome extension!
+
+Easily add the current web page to your changedetection.io tool, simply install the extension and click "Sync" to connect it to your existing changedetection.io install.
+
+[<img src="./docs/chrome-extension-screenshot.png" style="max-width:80%;" alt="Chrome Extension to easily add the current web-page to detect a change."  title="Chrome Extension to easily add the current web-page to detect a change."  />](https://chromewebstore.google.com/detail/changedetectionio-website/kefcfmgmlhmankjmnbijimhofdjekbop)
+
+[Goto the Chrome Webstore to download the extension.](https://chromewebstore.google.com/detail/changedetectionio-website/kefcfmgmlhmankjmnbijimhofdjekbop) ( Or check out the [GitHub repo](https://github.com/dgtlmoon/changedetection.io-browser-extension) ) 
 
 ## Installation
 
@@ -249,13 +280,7 @@ Supports managing the website watch list [via our API](https://changedetection.i
 Do you use changedetection.io to make money? does it save you time or money? Does it make your life easier? less stressful? Remember, we write this software when we should be doing actual paid work, we have to buy food and pay rent just like you.
 
 
-Firstly, consider taking out a [change detection monthly subscription - unlimited checks and watches](https://changedetection.io?src=github) , even if you don't use it, you still get the warm fuzzy feeling of helping out the project. (And who knows, you might just use it!)
-
-Or directly donate an amount PayPal [![Donate](https://img.shields.io/badge/Donate-PayPal-green.svg)](https://www.paypal.com/donate/?hosted_button_id=7CP6HR9ZCNDYJ)
-
-Or BTC `1PLFN327GyUarpJd7nVe7Reqg9qHx5frNn`
-
-<img src="https://raw.githubusercontent.com/dgtlmoon/changedetection.io/master/docs/btc-support.png" style="max-width:50%;" alt="Support us!"  />
+Consider taking out an officially supported [website change detection subscription](https://changedetection.io?src=github) , even if you don't use it, you still get the warm fuzzy feeling of helping out the project. (And who knows, you might just use it!)
 
 ## Commercial Support
 
@@ -270,6 +295,16 @@ I offer commercial support, this software is depended on by network security, ae
 [release-link]: https://github.com/dgtlmoon/changedetection.io/releases
 [docker-link]: https://hub.docker.com/r/dgtlmoon/changedetection.io
 
+## Commercial Licencing
+
+If you are reselling this software either in part or full as part of any commercial arrangement, you must abide by our COMMERCIAL_LICENCE.md found in our code repository, please contact dgtlmoon@gmail.com and contact@changedetection.io .
+
 ## Third-party licenses
 
 changedetectionio.html_tools.elementpath_tostring: Copyright (c), 2018-2021, SISSA (Scuola Internazionale Superiore di Studi Avanzati), Licensed under [MIT license](https://github.com/sissaschool/elementpath/blob/master/LICENSE)
+
+## Contributors
+
+Recognition of fantastic contributors to the project
+
+- Constantin Hong https://github.com/Constantin1489
