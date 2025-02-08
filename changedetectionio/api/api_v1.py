@@ -1,5 +1,5 @@
 import os
-from distutils.util import strtobool
+from changedetectionio.strtobool import strtobool
 
 from flask_expects_json import expects_json
 from changedetectionio import queuedWatchMetaData
@@ -12,9 +12,10 @@ import copy
 # See docs/README.md for rebuilding the docs/apidoc information
 
 from . import api_schema
+from ..model import watch_base
 
 # Build a JSON Schema atleast partially based on our Watch model
-from changedetectionio.model.Watch import base_config as watch_base_config
+watch_base_config = watch_base()
 schema = api_schema.build_watch_json_schema(watch_base_config)
 
 schema_create_watch = copy.deepcopy(schema)
@@ -30,7 +31,7 @@ class Watch(Resource):
         self.update_q = kwargs['update_q']
 
     # Get information about a single watch, excluding the history list (can be large)
-    # curl http://localhost:4000/api/v1/watch/<string:uuid>
+    # curl http://localhost:5000/api/v1/watch/<string:uuid>
     # @todo - version2 - ?muted and ?paused should be able to be called together, return the watch struct not "OK"
     # ?recheck=true
     @auth.check_token
@@ -39,9 +40,9 @@ class Watch(Resource):
         @api {get} /api/v1/watch/:uuid Single watch - get data, recheck, pause, mute.
         @apiDescription Retrieve watch information and set muted/paused status
         @apiExample {curl} Example usage:
-            curl http://localhost:4000/api/v1/watch/cc0cfffa-f449-477b-83ea-0caafd1dc091  -H"x-api-key:813031b16330fe25e3780cf0325daa45"
-            curl "http://localhost:4000/api/v1/watch/cc0cfffa-f449-477b-83ea-0caafd1dc091?muted=unmuted"  -H"x-api-key:813031b16330fe25e3780cf0325daa45"
-            curl "http://localhost:4000/api/v1/watch/cc0cfffa-f449-477b-83ea-0caafd1dc091?paused=unpaused"  -H"x-api-key:813031b16330fe25e3780cf0325daa45"
+            curl http://localhost:5000/api/v1/watch/cc0cfffa-f449-477b-83ea-0caafd1dc091  -H"x-api-key:813031b16330fe25e3780cf0325daa45"
+            curl "http://localhost:5000/api/v1/watch/cc0cfffa-f449-477b-83ea-0caafd1dc091?muted=unmuted"  -H"x-api-key:813031b16330fe25e3780cf0325daa45"
+            curl "http://localhost:5000/api/v1/watch/cc0cfffa-f449-477b-83ea-0caafd1dc091?paused=unpaused"  -H"x-api-key:813031b16330fe25e3780cf0325daa45"
         @apiName Watch
         @apiGroup Watch
         @apiParam {uuid} uuid Watch unique ID.
@@ -57,7 +58,7 @@ class Watch(Resource):
             abort(404, message='No watch exists with the UUID of {}'.format(uuid))
 
         if request.args.get('recheck'):
-            self.update_q.put(queuedWatchMetaData.PrioritizedItem(priority=1, item={'uuid': uuid, 'skip_when_checksum_same': True}))
+            self.update_q.put(queuedWatchMetaData.PrioritizedItem(priority=1, item={'uuid': uuid}))
             return "OK", 200
         if request.args.get('paused', '') == 'paused':
             self.datastore.data['watching'].get(uuid).pause()
@@ -75,6 +76,7 @@ class Watch(Resource):
         # Return without history, get that via another API call
         # Properties are not returned as a JSON, so add the required props manually
         watch['history_n'] = watch.history_n
+        # attr .last_changed will check for the last written text snapshot on change
         watch['last_changed'] = watch.last_changed
         watch['viewed'] = watch.viewed
         return watch
@@ -84,7 +86,7 @@ class Watch(Resource):
         """
         @api {delete} /api/v1/watch/:uuid Delete a watch and related history
         @apiExample {curl} Example usage:
-            curl http://localhost:4000/api/v1/watch/cc0cfffa-f449-477b-83ea-0caafd1dc091 -X DELETE -H"x-api-key:813031b16330fe25e3780cf0325daa45"
+            curl http://localhost:5000/api/v1/watch/cc0cfffa-f449-477b-83ea-0caafd1dc091 -X DELETE -H"x-api-key:813031b16330fe25e3780cf0325daa45"
         @apiParam {uuid} uuid Watch unique ID.
         @apiName Delete
         @apiGroup Watch
@@ -103,7 +105,7 @@ class Watch(Resource):
         @api {put} /api/v1/watch/:uuid Update watch information
         @apiExample {curl} Example usage:
             Update (PUT)
-            curl http://localhost:4000/api/v1/watch/cc0cfffa-f449-477b-83ea-0caafd1dc091 -X PUT -H"x-api-key:813031b16330fe25e3780cf0325daa45" -H "Content-Type: application/json" -d '{"url": "https://my-nice.com" , "tag": "new list"}'
+            curl http://localhost:5000/api/v1/watch/cc0cfffa-f449-477b-83ea-0caafd1dc091 -X PUT -H"x-api-key:813031b16330fe25e3780cf0325daa45" -H "Content-Type: application/json" -d '{"url": "https://my-nice.com" , "tag": "new list"}'
 
         @apiDescription Updates an existing watch using JSON, accepts the same structure as returned in <a href="#api-Watch-Watch">get single watch information</a>
         @apiParam {uuid} uuid Watch unique ID.
@@ -132,13 +134,14 @@ class WatchHistory(Resource):
         self.datastore = kwargs['datastore']
 
     # Get a list of available history for a watch by UUID
-    # curl http://localhost:4000/api/v1/watch/<string:uuid>/history
+    # curl http://localhost:5000/api/v1/watch/<string:uuid>/history
+    @auth.check_token
     def get(self, uuid):
         """
         @api {get} /api/v1/watch/<string:uuid>/history Get a list of all historical snapshots available for a watch
         @apiDescription Requires `uuid`, returns list
         @apiExample {curl} Example usage:
-            curl http://localhost:4000/api/v1/watch/cc0cfffa-f449-477b-83ea-0caafd1dc091/history -H"x-api-key:813031b16330fe25e3780cf0325daa45" -H "Content-Type: application/json"
+            curl http://localhost:5000/api/v1/watch/cc0cfffa-f449-477b-83ea-0caafd1dc091/history -H"x-api-key:813031b16330fe25e3780cf0325daa45" -H "Content-Type: application/json"
             {
                 "1676649279": "/tmp/data/6a4b7d5c-fee4-4616-9f43-4ac97046b595/cb7e9be8258368262246910e6a2a4c30.txt",
                 "1677092785": "/tmp/data/6a4b7d5c-fee4-4616-9f43-4ac97046b595/e20db368d6fc633e34f559ff67bb4044.txt",
@@ -166,26 +169,36 @@ class WatchSingleHistory(Resource):
         @api {get} /api/v1/watch/<string:uuid>/history/<int:timestamp> Get single snapshot from watch
         @apiDescription Requires watch `uuid` and `timestamp`. `timestamp` of "`latest`" for latest available snapshot, or <a href="#api-Watch_History-Get_list_of_available_stored_snapshots_for_watch">use the list returned here</a>
         @apiExample {curl} Example usage:
-            curl http://localhost:4000/api/v1/watch/cc0cfffa-f449-477b-83ea-0caafd1dc091/history/1677092977 -H"x-api-key:813031b16330fe25e3780cf0325daa45" -H "Content-Type: application/json"
+            curl http://localhost:5000/api/v1/watch/cc0cfffa-f449-477b-83ea-0caafd1dc091/history/1677092977 -H"x-api-key:813031b16330fe25e3780cf0325daa45" -H "Content-Type: application/json"
         @apiName Get single snapshot content
         @apiGroup Watch History
+        @apiParam {String} [html]       Optional Set to =1 to return the last HTML (only stores last 2 snapshots, use `latest` as timestamp)
         @apiSuccess (200) {String} OK
         @apiSuccess (404) {String} ERR Not found
         """
         watch = self.datastore.data['watching'].get(uuid)
         if not watch:
-            abort(404, message='No watch exists with the UUID of {}'.format(uuid))
+            abort(404, message=f"No watch exists with the UUID of {uuid}")
 
         if not len(watch.history):
-            abort(404, message='Watch found but no history exists for the UUID {}'.format(uuid))
+            abort(404, message=f"Watch found but no history exists for the UUID {uuid}")
 
         if timestamp == 'latest':
             timestamp = list(watch.history.keys())[-1]
 
-        content = watch.get_history_snapshot(timestamp)
+        if request.args.get('html'):
+            content = watch.get_fetched_html(timestamp)
+            if content:
+                response = make_response(content, 200)
+                response.mimetype = "text/html"
+            else:
+                response = make_response("No content found", 404)
+                response.mimetype = "text/plain"
+        else:
+            content = watch.get_history_snapshot(timestamp)
+            response = make_response(content, 200)
+            response.mimetype = "text/plain"
 
-        response = make_response(content, 200)
-        response.mimetype = "text/plain"
         return response
 
 
@@ -202,7 +215,7 @@ class CreateWatch(Resource):
         @api {post} /api/v1/watch Create a single watch
         @apiDescription Requires atleast `url` set, can accept the same structure as <a href="#api-Watch-Watch">get single watch information</a> to create.
         @apiExample {curl} Example usage:
-            curl http://localhost:4000/api/v1/watch -H"x-api-key:813031b16330fe25e3780cf0325daa45" -H "Content-Type: application/json" -d '{"url": "https://my-nice.com" , "tag": "nice list"}'
+            curl http://localhost:5000/api/v1/watch -H"x-api-key:813031b16330fe25e3780cf0325daa45" -H "Content-Type: application/json" -d '{"url": "https://my-nice.com" , "tag": "nice list"}'
         @apiName Create
         @apiGroup Watch
         @apiSuccess (200) {String} OK Was created
@@ -234,7 +247,7 @@ class CreateWatch(Resource):
 
         new_uuid = self.datastore.add_watch(url=url, extras=extras, tag=tags)
         if new_uuid:
-            self.update_q.put(queuedWatchMetaData.PrioritizedItem(priority=1, item={'uuid': new_uuid, 'skip_when_checksum_same': True}))
+            self.update_q.put(queuedWatchMetaData.PrioritizedItem(priority=1, item={'uuid': new_uuid}))
             return {'uuid': new_uuid}, 201
         else:
             return "Invalid or unsupported URL", 400
@@ -245,7 +258,7 @@ class CreateWatch(Resource):
         @api {get} /api/v1/watch List watches
         @apiDescription Return concise list of available watches and some very basic info
         @apiExample {curl} Example usage:
-            curl http://localhost:4000/api/v1/watch -H"x-api-key:813031b16330fe25e3780cf0325daa45"
+            curl http://localhost:5000/api/v1/watch -H"x-api-key:813031b16330fe25e3780cf0325daa45"
             {
                 "6a4b7d5c-fee4-4616-9f43-4ac97046b595": {
                     "last_changed": 1677103794,
@@ -291,7 +304,7 @@ class CreateWatch(Resource):
 
         if request.args.get('recheck_all'):
             for uuid in self.datastore.data['watching'].keys():
-                self.update_q.put(queuedWatchMetaData.PrioritizedItem(priority=1, item={'uuid': uuid, 'skip_when_checksum_same': True}))
+                self.update_q.put(queuedWatchMetaData.PrioritizedItem(priority=1, item={'uuid': uuid}))
             return {'status': "OK"}, 200
 
         return list, 200
@@ -363,7 +376,7 @@ class SystemInfo(Resource):
         @api {get} /api/v1/systeminfo Return system info
         @apiDescription Return some info about the current system state
         @apiExample {curl} Example usage:
-            curl http://localhost:4000/api/v1/systeminfo -H"x-api-key:813031b16330fe25e3780cf0325daa45"
+            curl http://localhost:5000/api/v1/systeminfo -H"x-api-key:813031b16330fe25e3780cf0325daa45"
             HTTP/1.0 200
             {
                 'queue_size': 10 ,

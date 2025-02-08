@@ -1,4 +1,4 @@
-#!/usr/bin/python3
+#!/usr/bin/env python3
 
 import time
 from flask import url_for
@@ -6,7 +6,7 @@ from .util import set_original_response, set_modified_response, live_server_setu
 
 
 # `subtractive_selectors` should still work in `source:` type requests
-def test_fetch_pdf(client, live_server):
+def test_fetch_pdf(client, live_server, measure_memory_usage):
     import shutil
     shutil.copy("tests/test.pdf", "test-datastore/endpoint-test.pdf")
 
@@ -29,7 +29,8 @@ def test_fetch_pdf(client, live_server):
         follow_redirects=True
     )
 
-    assert b'PDF-1.5' not in res.data
+    # PDF header should not be there (it was converted to text)
+    assert b'PDF' not in res.data[:10]
     assert b'hello world' in res.data
 
     # So we know if the file changes in other ways

@@ -1,4 +1,4 @@
-#!/usr/bin/python3
+# -*- coding: utf-8 -*-
 
 import time
 from flask import url_for
@@ -49,7 +49,7 @@ def set_modified_response():
 
 
 # Handle utf-8 charset replies https://github.com/dgtlmoon/changedetection.io/pull/613
-def test_check_xpath_filter_utf8(client, live_server):
+def test_check_xpath_filter_utf8(client, live_server, measure_memory_usage):
     filter = '//item/*[self::description]'
 
     d = '''<?xml version="1.0" encoding="UTF-8"?>
@@ -105,7 +105,7 @@ def test_check_xpath_filter_utf8(client, live_server):
 
 
 # Handle utf-8 charset replies https://github.com/dgtlmoon/changedetection.io/pull/613
-def test_check_xpath_text_function_utf8(client, live_server):
+def test_check_xpath_text_function_utf8(client, live_server, measure_memory_usage):
     filter = '//item/title/text()'
 
     d = '''<?xml version="1.0" encoding="UTF-8"?>
@@ -161,14 +161,14 @@ def test_check_xpath_text_function_utf8(client, live_server):
         follow_redirects=True
     )
 
-    assert b'<div class="">Stock Alert (UK): RPi CM4' in res.data
-    assert b'<div class="">Stock Alert (UK): Big monitor' in res.data
+    assert b'Stock Alert (UK): RPi CM4' in res.data
+    assert b'Stock Alert (UK): Big monitor' in res.data
 
     res = client.get(url_for("form_delete", uuid="all"), follow_redirects=True)
     assert b'Deleted' in res.data
 
 
-def test_check_markup_xpath_filter_restriction(client, live_server):
+def test_check_markup_xpath_filter_restriction(client, live_server, measure_memory_usage):
     xpath_filter = "//*[contains(@class, 'sametext')]"
 
     set_original_response()
@@ -214,7 +214,7 @@ def test_check_markup_xpath_filter_restriction(client, live_server):
     assert b'Deleted' in res.data
 
 
-def test_xpath_validation(client, live_server):
+def test_xpath_validation(client, live_server, measure_memory_usage):
     # Add our URL to the import page
     test_url = url_for('test_endpoint', _external=True)
     res = client.post(
@@ -235,7 +235,7 @@ def test_xpath_validation(client, live_server):
     assert b'Deleted' in res.data
 
 
-def test_xpath23_prefix_validation(client, live_server):
+def test_xpath23_prefix_validation(client, live_server, measure_memory_usage):
     # Add our URL to the import page
     test_url = url_for('test_endpoint', _external=True)
     res = client.post(
@@ -255,8 +255,71 @@ def test_xpath23_prefix_validation(client, live_server):
     res = client.get(url_for("form_delete", uuid="all"), follow_redirects=True)
     assert b'Deleted' in res.data
 
+def test_xpath1_lxml(client, live_server, measure_memory_usage):
+    #live_server_setup(live_server)
 
-def test_xpath1_validation(client, live_server):
+    d = '''<?xml version="1.0" encoding="UTF-8"?>
+    <rss xmlns:taxo="http://purl.org/rss/1.0/modules/taxonomy/" xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#" xmlns:itunes="http://www.itunes.com/dtds/podcast-1.0.dtd" xmlns:dc="http://purl.org/dc/elements/1.1/" version="2.0">
+    	<channel>
+    		<title>rpilocator.com</title>
+    		<link>https://rpilocator.com</link>
+    		<description>Find Raspberry Pi Computers in Stock</description>
+    		<lastBuildDate>Thu, 19 May 2022 23:27:30 GMT</lastBuildDate>
+    		<image>
+    			<url>https://rpilocator.com/favicon.png</url>
+    			<title>rpilocator.com</title>
+    			<link>https://rpilocator.com/</link>
+    			<width>32</width>
+    			<height>32</height>
+    		</image>
+    		<item>
+    			<title>Stock Alert (UK): RPi CM4</title>
+    			<foo>something else unrelated</foo>
+    		</item>
+    		<item>
+    			<title>Stock Alert (UK): Big monitorěěěě</title>
+    			<foo>something else unrelated</foo>
+    		</item>		
+    	</channel>
+    </rss>'''.encode('utf-8')
+
+    with open("test-datastore/endpoint-content.txt", "wb") as f:
+        f.write(d)
+
+
+    test_url = url_for('test_endpoint', _external=True)
+    res = client.post(
+        url_for("import_page"),
+        data={"urls": test_url},
+        follow_redirects=True
+    )
+    assert b"1 Imported" in res.data
+    wait_for_all_checks(client)
+
+    res = client.post(
+        url_for("edit_page", uuid="first"),
+        data={"include_filters": "xpath1://title/text()", "url": test_url, "tags": "", "headers": "",
+              'fetch_backend': "html_requests"},
+        follow_redirects=True
+    )
+
+    ##### #2312
+    wait_for_all_checks(client)
+    res = client.get(url_for("index"))
+    assert b'_ElementStringResult' not in res.data # tested with 5.1.1 when it was removed and 5.1.0
+    assert b'Exception' not in res.data
+    res = client.get(
+        url_for("preview_page", uuid="first"),
+        follow_redirects=True
+    )
+
+    assert b"rpilocator.com" in res.data  # in selector
+    assert "Stock Alert (UK): Big monitorěěěě".encode('utf-8') in res.data  # not in selector
+
+    #####
+
+
+def test_xpath1_validation(client, live_server, measure_memory_usage):
     # Add our URL to the import page
     test_url = url_for('test_endpoint', _external=True)
     res = client.post(
@@ -278,7 +341,7 @@ def test_xpath1_validation(client, live_server):
 
 
 # actually only really used by the distll.io importer, but could be handy too
-def test_check_with_prefix_include_filters(client, live_server):
+def test_check_with_prefix_include_filters(client, live_server, measure_memory_usage):
     res = client.get(url_for("form_delete", uuid="all"), follow_redirects=True)
     assert b'Deleted' in res.data
 
@@ -315,7 +378,7 @@ def test_check_with_prefix_include_filters(client, live_server):
     client.get(url_for("form_delete", uuid="all"), follow_redirects=True)
 
 
-def test_various_rules(client, live_server):
+def test_various_rules(client, live_server, measure_memory_usage):
     # Just check these don't error
     # live_server_setup(live_server)
     with open("test-datastore/endpoint-content.txt", "w") as f:
@@ -363,7 +426,7 @@ def test_various_rules(client, live_server):
     assert b'Deleted' in res.data
 
 
-def test_xpath_20(client, live_server):
+def test_xpath_20(client, live_server, measure_memory_usage):
     test_url = url_for('test_endpoint', _external=True)
     res = client.post(
         url_for("import_page"),
@@ -400,7 +463,7 @@ def test_xpath_20(client, live_server):
     client.get(url_for("form_delete", uuid="all"), follow_redirects=True)
 
 
-def test_xpath_20_function_count(client, live_server):
+def test_xpath_20_function_count(client, live_server, measure_memory_usage):
     set_original_response()
 
     # Add our URL to the import page
@@ -436,7 +499,7 @@ def test_xpath_20_function_count(client, live_server):
     client.get(url_for("form_delete", uuid="all"), follow_redirects=True)
 
 
-def test_xpath_20_function_count2(client, live_server):
+def test_xpath_20_function_count2(client, live_server, measure_memory_usage):
     set_original_response()
 
     # Add our URL to the import page
@@ -472,7 +535,7 @@ def test_xpath_20_function_count2(client, live_server):
     client.get(url_for("form_delete", uuid="all"), follow_redirects=True)
 
 
-def test_xpath_20_function_string_join_matches(client, live_server):
+def test_xpath_20_function_string_join_matches(client, live_server, measure_memory_usage):
     set_original_response()
 
     # Add our URL to the import page

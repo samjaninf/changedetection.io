@@ -1,12 +1,10 @@
 $(document).ready(function () {
-    var csrftoken = $('input[name=csrf_token]').val();
-    $.ajaxSetup({
-        beforeSend: function (xhr, settings) {
-            if (!/^(GET|HEAD|OPTIONS|TRACE)$/i.test(settings.type) && !this.crossDomain) {
-                xhr.setRequestHeader("X-CSRFToken", csrftoken)
-            }
+    $('.needs-localtime').each(function () {
+        for (var option of this.options) {
+            var dateObject = new Date(option.value * 1000);
+            option.label = dateObject.toLocaleString(undefined, {dateStyle: "full", timeStyle: "medium"});
         }
-    })
+    });
 
     // Load it when the #screenshot tab is in use, so we dont give a slow experience when waiting for the text diff to load
     window.addEventListener('hashchange', function (e) {
@@ -41,6 +39,12 @@ $(document).ready(function () {
       $("#highlightSnippet").remove();
     }
 
+    // Listen for Escape key press
+    window.addEventListener('keydown', function (e) {
+        if (e.key === 'Escape') {
+            clean();
+        }
+    }, false);
 
     function dragTextHandler(event) {
         console.log('mouseupped');
@@ -90,5 +94,10 @@ $(document).ready(function () {
         }
     }
 
-
+    $('#diff-form').on('submit', function (e) {
+        if ($('select[name=from_version]').val() === $('select[name=to_version]').val()) {
+            e.preventDefault();
+            alert('Error - You are trying to compare the same version.');
+        }
+    });
 });

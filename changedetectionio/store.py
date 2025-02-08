@@ -1,22 +1,25 @@
-from distutils.util import strtobool
+from changedetectionio.strtobool import strtobool
 
 from flask import (
     flash
 )
 
+from .html_tools import TRANSLATE_WHITESPACE_TABLE
 from . model import App, Watch
 from copy import deepcopy, copy
 from os import path, unlink
 from threading import Lock
 import json
-import logging
 import os
 import re
-import requests
 import secrets
 import threading
 import time
 import uuid as uuid_builder
+from loguru import logger
+
+from .processors import get_custom_watch_obj_for_processor
+from .processors.restock_diff import Restock
 
 # Because the server will run as a daemon and wont know the URL for notification links when firing off a notification
 BASE_URL_NOT_SET_TEXT = '("Base URL" not set - see settings - notifications)'
@@ -42,7 +45,7 @@ class ChangeDetectionStore:
         self.__data = App.model()
         self.datastore_path = datastore_path
         self.json_store_path = "{}/url-watches.json".format(self.datastore_path)
-        print(">>> Datastore path is ", self.json_store_path)
+        logger.info(f"Datastore path is '{self.json_store_path}'")
         self.needs_write = False
         self.start_time = time.time()
         self.stop_thread = False
@@ -81,14 +84,18 @@ class ChangeDetectionStore:
 
                 # Convert each existing watch back to the Watch.model object
                 for uuid, watch in self.__data['watching'].items():
-                    watch['uuid']=uuid
-                    self.__data['watching'][uuid] = Watch.model(datastore_path=self.datastore_path, default=watch)
-                    print("Watching:", uuid, self.__data['watching'][uuid]['url'])
+                    self.__data['watching'][uuid] = self.rehydrate_entity(uuid, watch)
+                    logger.info(f"Watching: {uuid} {watch['url']}")
+
+                # And for Tags also, should be Restock type because it has extra settings
+                for uuid, tag in self.__data['settings']['application']['tags'].items():
+                    self.__data['settings']['application']['tags'][uuid] = self.rehydrate_entity(uuid, tag, processor_override='restock_diff')
+                    logger.info(f"Tag: {uuid} {tag['title']}")
 
         # First time ran, Create the datastore.
         except (FileNotFoundError):
             if include_default_watches:
-                print("No JSON DB found at {}, creating JSON store at {}".format(self.json_store_path, self.datastore_path))
+                logger.critical(f"No JSON DB found at {self.json_store_path}, creating JSON store at {self.datastore_path}")
                 self.add_watch(url='https://news.ycombinator.com/',
                                tag='Tech news',
                                extras={'fetch_backend': 'html_requests'})
@@ -124,12 +131,12 @@ class ChangeDetectionStore:
                 self.__data['app_guid'] = str(uuid_builder.uuid4())
 
         # Generate the URL access token for RSS feeds
-        if not 'rss_access_token' in self.__data['settings']['application']:
+        if not self.__data['settings']['application'].get('rss_access_token'):
             secret = secrets.token_hex(16)
             self.__data['settings']['application']['rss_access_token'] = secret
 
         # Generate the API access token
-        if not 'api_access_token' in self.__data['settings']['application']:
+        if not self.__data['settings']['application'].get('api_access_token'):
             secret = secrets.token_hex(16)
             self.__data['settings']['application']['api_access_token'] = secret
 
@@ -138,8 +145,24 @@ class ChangeDetectionStore:
         # Finally start the thread that will manage periodic data saves to JSON
         save_data_thread = threading.Thread(target=self.save_datastore).start()
 
+    def rehydrate_entity(self, uuid, entity, processor_override=None):
+        """Set the dict back to the dict Watch object"""
+        entity['uuid'] = uuid
+
+        if processor_override:
+            watch_class = get_custom_watch_obj_for_processor(processor_override)
+            entity['processor']=processor_override
+        else:
+            watch_class = get_custom_watch_obj_for_processor(entity.get('processor'))
+
+        if entity.get('uuid') != 'text_json_diff':
+            logger.trace(f"Loading Watch object '{watch_class.__module__}.{watch_class.__name__}' for UUID {uuid}")
+
+        entity = watch_class(datastore_path=self.datastore_path, default=entity)
+        return entity
+
     def set_last_viewed(self, uuid, timestamp):
-        logging.debug("Setting watch UUID: {} last viewed to {}".format(uuid, int(timestamp)))
+        logger.debug(f"Setting watch UUID: {uuid} last viewed to {int(timestamp)}")
         self.data['watching'][uuid].update({'last_viewed': int(timestamp)})
         self.needs_write = True
 
@@ -163,7 +186,6 @@ class ChangeDetectionStore:
                         del (update_obj[dict_key])
 
             self.__data['watching'][uuid].update(update_obj)
-
         self.needs_write = True
 
     @property
@@ -177,8 +199,11 @@ class ChangeDetectionStore:
 
     @property
     def has_unviewed(self):
+        if not self.__data.get('watching'):
+            return None
+
         for uuid, watch in self.__data['watching'].items():
-            if watch.viewed == False:
+            if watch.history_n >= 2 and watch.viewed == False:
                 return True
         return False
 
@@ -241,33 +266,11 @@ class ChangeDetectionStore:
 
     # Remove a watchs data but keep the entry (URL etc)
     def clear_watch_history(self, uuid):
-        import pathlib
-
-        self.__data['watching'][uuid].update({
-                'browser_steps_last_error_step' : None,
-                'check_count': 0,
-                'fetch_time' : 0.0,
-                'has_ldjson_price_data': None,
-                'in_stock': None,
-                'last_checked': 0,
-                'last_error': False,
-                'last_notification_error': False,
-                'last_viewed': 0,
-                'previous_md5': False,
-                'previous_md5_before_filters': False,
-                'track_ldjson_price_data': None,
-            })
-
-        # JSON Data, Screenshots, Textfiles (history index and snapshots), HTML in the future etc
-        for item in pathlib.Path(os.path.join(self.datastore_path, uuid)).rglob("*.*"):
-            unlink(item)
-
-        # Force the attr to recalculate
-        bump = self.__data['watching'][uuid].history
-
+        self.__data['watching'][uuid].clear_watch()
         self.needs_write_urgent = True
 
     def add_watch(self, url, tag='', extras=None, tag_uuids=None, write_to_disk_now=True):
+        import requests
 
         if extras is None:
             extras = {}
@@ -316,7 +319,7 @@ class ChangeDetectionStore:
                             apply_extras['include_filters'] = [res['css_filter']]
 
             except Exception as e:
-                logging.error("Error fetching metadata for shared watch link", url, str(e))
+                logger.error(f"Error fetching metadata for shared watch link {url} {str(e)}")
                 flash("Error fetching metadata for {}".format(url), 'error')
                 return False
         from .model.Watch import is_safe_url
@@ -341,11 +344,13 @@ class ChangeDetectionStore:
         if apply_extras.get('tags'):
             apply_extras['tags'] = list(set(apply_extras.get('tags')))
 
-        new_watch = Watch.model(datastore_path=self.datastore_path, url=url)
+        # If the processor also has its own Watch implementation
+        watch_class = get_custom_watch_obj_for_processor(apply_extras.get('processor'))
+        new_watch = watch_class(datastore_path=self.datastore_path, url=url)
 
         new_uuid = new_watch.get('uuid')
 
-        logging.debug("Added URL {} - {}".format(url, new_uuid))
+        logger.debug(f"Adding URL '{url}' - {new_uuid}")
 
         for k in ['uuid', 'history', 'last_checked', 'last_changed', 'newest_history_key', 'previous_md5', 'viewed']:
             if k in apply_extras:
@@ -362,68 +367,27 @@ class ChangeDetectionStore:
         if write_to_disk_now:
             self.sync_to_json()
 
-        print("added ", url)
+        logger.debug(f"Added '{url}'")
 
         return new_uuid
 
     def visualselector_data_is_ready(self, watch_uuid):
         output_path = "{}/{}".format(self.datastore_path, watch_uuid)
         screenshot_filename = "{}/last-screenshot.png".format(output_path)
-        elements_index_filename = "{}/elements.json".format(output_path)
+        elements_index_filename = "{}/elements.deflate".format(output_path)
         if path.isfile(screenshot_filename) and  path.isfile(elements_index_filename) :
             return True
 
         return False
 
-    # Save as PNG, PNG is larger but better for doing visual diff in the future
-    def save_screenshot(self, watch_uuid, screenshot: bytes, as_error=False):
-        if not self.data['watching'].get(watch_uuid):
-            return
-
-        if as_error:
-            target_path = os.path.join(self.datastore_path, watch_uuid, "last-error-screenshot.png")
-        else:
-            target_path = os.path.join(self.datastore_path, watch_uuid, "last-screenshot.png")
-
-        self.data['watching'][watch_uuid].ensure_data_dir_exists()
-
-        with open(target_path, 'wb') as f:
-            f.write(screenshot)
-            f.close()
-
-
-    def save_error_text(self, watch_uuid, contents):
-        if not self.data['watching'].get(watch_uuid):
-            return
-
-        self.data['watching'][watch_uuid].ensure_data_dir_exists()
-        target_path = os.path.join(self.datastore_path, watch_uuid, "last-error.txt")
-        with open(target_path, 'w') as f:
-            f.write(contents)
-
-    def save_xpath_data(self, watch_uuid, data, as_error=False):
-
-        if not self.data['watching'].get(watch_uuid):
-            return
-        if as_error:
-            target_path = os.path.join(self.datastore_path, watch_uuid, "elements-error.json")
-        else:
-            target_path = os.path.join(self.datastore_path, watch_uuid, "elements.json")
-        self.data['watching'][watch_uuid].ensure_data_dir_exists()
-        with open(target_path, 'w') as f:
-            f.write(json.dumps(data))
-            f.close()
-
-
     def sync_to_json(self):
-        logging.info("Saving JSON..")
-        print("Saving JSON..")
+        logger.info("Saving JSON..")
         try:
             data = deepcopy(self.__data)
         except RuntimeError as e:
             # Try again in 15 seconds
             time.sleep(15)
-            logging.error ("! Data changed when writing to JSON, trying again.. %s", str(e))
+            logger.error(f"! Data changed when writing to JSON, trying again.. {str(e)}")
             self.sync_to_json()
             return
         else:
@@ -436,7 +400,7 @@ class ChangeDetectionStore:
                     json.dump(data, json_file, indent=4)
                 os.replace(self.json_store_path+".tmp", self.json_store_path)
             except Exception as e:
-                logging.error("Error writing JSON!! (Main JSON file save was skipped) : %s", str(e))
+                logger.error(f"Error writing JSON!! (Main JSON file save was skipped) : {str(e)}")
 
             self.needs_write = False
             self.needs_write_urgent = False
@@ -447,7 +411,16 @@ class ChangeDetectionStore:
 
         while True:
             if self.stop_thread:
-                print("Shutting down datastore thread")
+                # Suppressing "Logging error in Loguru Handler #0" during CICD.
+                # Not a meaningful difference for a real use-case just for CICD.
+                # the side effect is a "Shutting down datastore thread" message
+                # at the end of each test.
+                # But still more looking better.
+                import sys
+                logger.remove()
+                logger.add(sys.stderr)
+
+                logger.critical("Shutting down datastore thread")
                 return
 
             if self.needs_write or self.needs_write_urgent:
@@ -463,7 +436,7 @@ class ChangeDetectionStore:
     # Go through the datastore path and remove any snapshots that are not mentioned in the index
     # This usually is not used, but can be handy.
     def remove_unused_snapshots(self):
-        print ("Removing snapshots from datastore that are not in the index..")
+        logger.info("Removing snapshots from datastore that are not in the index..")
 
         index=[]
         for uuid in self.data['watching']:
@@ -476,7 +449,7 @@ class ChangeDetectionStore:
         for uuid in self.data['watching']:
             for item in pathlib.Path(self.datastore_path).rglob(uuid+"/*.txt"):
                 if not str(item) in index:
-                    print ("Removing",item)
+                    logger.info(f"Removing {item}")
                     unlink(item)
 
     @property
@@ -545,7 +518,6 @@ class ChangeDetectionStore:
         return os.path.isfile(filepath)
 
     def get_all_base_headers(self):
-        from .model.App import parse_headers_from_text_file
         headers = {}
         # Global app settings
         headers.update(self.data['settings'].get('headers', {}))
@@ -562,7 +534,7 @@ class ChangeDetectionStore:
             if os.path.isfile(filepath):
                 headers.update(parse_headers_from_text_file(filepath))
         except Exception as e:
-            print(f"ERROR reading headers.txt at {filepath}", str(e))
+            logger.error(f"ERROR reading headers.txt at {filepath} {str(e)}")
 
         watch = self.data['watching'].get(uuid)
         if watch:
@@ -573,7 +545,7 @@ class ChangeDetectionStore:
                 if os.path.isfile(filepath):
                     headers.update(parse_headers_from_text_file(filepath))
             except Exception as e:
-                print(f"ERROR reading headers.txt at {filepath}", str(e))
+                logger.error(f"ERROR reading headers.txt at {filepath} {str(e)}")
 
             # In /datastore/tag-name.txt
             tags = self.get_all_tags_for_watch(uuid=uuid)
@@ -584,7 +556,7 @@ class ChangeDetectionStore:
                     if os.path.isfile(filepath):
                         headers.update(parse_headers_from_text_file(filepath))
                 except Exception as e:
-                    print(f"ERROR reading headers.txt at {filepath}", str(e))
+                    logger.error(f"ERROR reading headers.txt at {filepath} {str(e)}")
 
         return headers
 
@@ -602,19 +574,20 @@ class ChangeDetectionStore:
     def add_tag(self, name):
         # If name exists, return that
         n = name.strip().lower()
-        print (f">>> Adding new tag - '{n}'")
+        logger.debug(f">>> Adding new tag - '{n}'")
         if not n:
             return False
 
         for uuid, tag in self.__data['settings']['application'].get('tags', {}).items():
             if n == tag.get('title', '').lower().strip():
-                print (f">>> Tag {name} already exists")
+                logger.warning(f"Tag '{name}' already exists, skipping creation.")
                 return uuid
 
         # Eventually almost everything todo with a watch will apply as a Tag
         # So we use the same model as a Watch
         with self.lock:
-            new_tag = Watch.model(datastore_path=self.datastore_path, default={
+            from .model import Tag
+            new_tag = Tag.model(datastore_path=self.datastore_path, default={
                 'title': name.strip(),
                 'date_created': int(time.time())
             })
@@ -648,7 +621,43 @@ class ChangeDetectionStore:
         return res
 
     def tag_exists_by_name(self, tag_name):
-        return any(v.get('title', '').lower() == tag_name.lower() for k, v in self.__data['settings']['application']['tags'].items())
+        # Check if any tag dictionary has a 'title' attribute matching the provided tag_name
+        tags = self.__data['settings']['application']['tags'].values()
+        return next((v for v in tags if v.get('title', '').lower() == tag_name.lower()),
+                    None)
+
+    def any_watches_have_processor_by_name(self, processor_name):
+        for watch in self.data['watching'].values():
+            if watch.get('processor') == processor_name:
+                return True
+        return False
+
+    def get_unique_notification_tokens_available(self):
+        # Ask each type of watch if they have any extra notification token to add to the validation
+        extra_notification_tokens = {}
+        watch_processors_checked = set()
+
+        for watch_uuid, watch in self.__data['watching'].items():
+            processor = watch.get('processor')
+            if processor not in watch_processors_checked:
+                extra_notification_tokens.update(watch.extra_notification_token_values())
+                watch_processors_checked.add(processor)
+
+        return extra_notification_tokens
+
+    def get_unique_notification_token_placeholders_available(self):
+        # The actual description of the tokens, could be combined with get_unique_notification_tokens_available instead of doing this twice
+        extra_notification_tokens = []
+        watch_processors_checked = set()
+
+        for watch_uuid, watch in self.__data['watching'].items():
+            processor = watch.get('processor')
+            if processor not in watch_processors_checked:
+                extra_notification_tokens+=watch.extra_notification_token_placeholder_info()
+                watch_processors_checked.add(processor)
+
+        return extra_notification_tokens
+
 
     def get_updates_available(self):
         import inspect
@@ -670,7 +679,7 @@ class ChangeDetectionStore:
         updates_available = self.get_updates_available()
         for update_n in updates_available:
             if update_n > self.__data['settings']['application']['schema_version']:
-                print ("Applying update_{}".format((update_n)))
+                logger.critical(f"Applying update_{update_n}")
                 # Wont exist on fresh installs
                 if os.path.exists(self.json_store_path):
                     shutil.copyfile(self.json_store_path, self.datastore_path+"/url-watches-before-{}.json".format(update_n))
@@ -678,8 +687,8 @@ class ChangeDetectionStore:
                 try:
                     update_method = getattr(self, "update_{}".format(update_n))()
                 except Exception as e:
-                    print("Error while trying update_{}".format((update_n)))
-                    print(e)
+                    logger.error(f"Error while trying update_{update_n}")
+                    logger.error(e)
                     # Don't run any more updates
                     return
                 else:
@@ -717,7 +726,7 @@ class ChangeDetectionStore:
                         with open(os.path.join(target_path, "history.txt"), "w") as f:
                             f.writelines(history)
                     else:
-                        logging.warning("Datastore history directory {} does not exist, skipping history import.".format(target_path))
+                        logger.warning(f"Datastore history directory {target_path} does not exist, skipping history import.")
 
                 # No longer needed, dynamically pulled from the disk when needed.
                 # But we should set it back to a empty dict so we don't break if this schema runs on an earlier version.
@@ -742,17 +751,17 @@ class ChangeDetectionStore:
     def update_5(self):
         # If the watch notification body, title look the same as the global one, unset it, so the watch defaults back to using the main settings
         # In other words - the watch notification_title and notification_body are not needed if they are the same as the default one
-        current_system_body = self.data['settings']['application']['notification_body'].translate(str.maketrans('', '', "\r\n "))
-        current_system_title = self.data['settings']['application']['notification_body'].translate(str.maketrans('', '', "\r\n "))
+        current_system_body = self.data['settings']['application']['notification_body'].translate(TRANSLATE_WHITESPACE_TABLE)
+        current_system_title = self.data['settings']['application']['notification_body'].translate(TRANSLATE_WHITESPACE_TABLE)
         for uuid, watch in self.data['watching'].items():
             try:
                 watch_body = watch.get('notification_body', '')
-                if watch_body and watch_body.translate(str.maketrans('', '', "\r\n ")) == current_system_body:
+                if watch_body and watch_body.translate(TRANSLATE_WHITESPACE_TABLE) == current_system_body:
                     # Looks the same as the default one, so unset it
                     watch['notification_body'] = None
 
                 watch_title = watch.get('notification_title', '')
-                if watch_title and watch_title.translate(str.maketrans('', '', "\r\n ")) == current_system_title:
+                if watch_title and watch_title.translate(TRANSLATE_WHITESPACE_TABLE) == current_system_title:
                     # Looks the same as the default one, so unset it
                     watch['notification_title'] = None
             except Exception as e:
@@ -860,3 +869,58 @@ class ChangeDetectionStore:
                         self.__data["watching"][awatch]['include_filters'][num] = 'xpath1:' + selector
                     if selector.startswith('xpath:'):
                         self.__data["watching"][awatch]['include_filters'][num] = selector.replace('xpath:', 'xpath1:', 1)
+
+    # Use more obvious default time setting
+    def update_15(self):
+        for uuid in self.__data["watching"]:
+            if self.__data["watching"][uuid]['time_between_check'] == self.__data['settings']['requests']['time_between_check']:
+                # What the old logic was, which was pretty confusing
+                self.__data["watching"][uuid]['time_between_check_use_default'] = True
+            elif all(value is None or value == 0 for value in self.__data["watching"][uuid]['time_between_check'].values()):
+                self.__data["watching"][uuid]['time_between_check_use_default'] = True
+            else:
+                # Something custom here
+                self.__data["watching"][uuid]['time_between_check_use_default'] = False
+
+    # Correctly set datatype for older installs where 'tag' was string and update_12 did not catch it
+    def update_16(self):
+        for uuid, watch in self.data['watching'].items():
+            if isinstance(watch.get('tags'), str):
+                self.data['watching'][uuid]['tags'] = []
+
+    # Migrate old 'in_stock' values to the new Restock
+    def update_17(self):
+        for uuid, watch in self.data['watching'].items():
+            if 'in_stock' in watch:
+                watch['restock'] = Restock({'in_stock': watch.get('in_stock')})
+                del watch['in_stock']
+
+    # Migrate old restock settings
+    def update_18(self):
+        for uuid, watch in self.data['watching'].items():
+            if not watch.get('restock_settings'):
+                # So we enable price following by default
+                self.data['watching'][uuid]['restock_settings'] = {'follow_price_changes': True}
+
+            # Migrate and cleanoff old value
+            self.data['watching'][uuid]['restock_settings']['in_stock_processing'] = 'in_stock_only' if watch.get(
+                'in_stock_only') else 'all_changes'
+
+            if self.data['watching'][uuid].get('in_stock_only'):
+                del (self.data['watching'][uuid]['in_stock_only'])
+
+    # Compress old elements.json to elements.deflate, saving disk, this compression is pretty fast.
+    def update_19(self):
+        import zlib
+
+        for uuid, watch in self.data['watching'].items():
+            json_path = os.path.join(self.datastore_path, uuid, "elements.json")
+            deflate_path = os.path.join(self.datastore_path, uuid, "elements.deflate")
+
+            if os.path.exists(json_path):
+                with open(json_path, "rb") as f_j:
+                    with open(deflate_path, "wb") as f_d:
+                        logger.debug(f"Compressing {str(json_path)} to {str(deflate_path)}..")
+                        f_d.write(zlib.compress(f_j.read()))
+                        os.unlink(json_path)
+

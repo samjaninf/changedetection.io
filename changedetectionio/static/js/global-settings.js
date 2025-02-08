@@ -18,9 +18,25 @@ $(document).ready(function () {
 
     });
 
-    $("#notification-token-toggle").click(function (e) {
+    $(".toggle-show").click(function (e) {
         e.preventDefault();
-        $('#notification-tokens-info').toggle();
+        let target = $(this).data('target');
+        $(target).toggle();
     });
+
+    // Time zone config related
+    $(".local-time").each(function (e) {
+        $(this).text(new Date($(this).data("utc")).toLocaleString());
+    })
+
+    const timezoneInput = $('#application-timezone');
+    if(timezoneInput.length) {
+        const timezone = Intl.DateTimeFormat().resolvedOptions().timeZone;
+        if (!timezoneInput.val().trim()) {
+            timezoneInput.val(timezone);
+            timezoneInput.after('<div class="timezone-message">The timezone was set from your browser, <strong>be sure to press save!</strong></div>');
+        }
+    }
+
 });
 
